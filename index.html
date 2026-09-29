@@ -1,0 +1,212 @@
+from pathlib import Path
+
+html = r'''<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TRUCK DRIVER Q2</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#87ceeb;font-family:Arial,sans-serif}
+#hud{position:fixed;top:10px;left:10px;z-index:5;color:white;background:#0008;padding:10px;border-radius:10px;line-height:1.5}
+#msg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:6;color:white;background:#000b;padding:20px;border-radius:14px;text-align:center;display:none}
+#controls{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:10px}
+button{font-size:20px;padding:14px 18px;border:0;border-radius:14px;background:#222c;color:white}
+#vr{position:fixed;right:12px;top:12px;z-index:10}
+</style>
+</head>
+<body>
+<div id="hud">
+🚚 TRUCK DRIVER Q2<br>
+Velocidad: <span id="speed">0</span> km/h<br>
+Daño: <span id="damage">0</span>%<br>
+💰 Dinero: $<span id="money">0</span>
+</div>
+<div id="msg"></div>
+<div id="controls">
+<button id="left">◀</button><button id="brake">FRENO</button>
+<button id="gas">ACELERAR</button><button id="right">▶</button>
+<button id="nitro">NITRO</button>
+</div>
+<button id="vr">🥽 ENTRAR EN VR</button>
+
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x87ceeb);
+scene.fog=new THREE.Fog(0x87ceeb,80,300);
+
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.1,500);
+camera.position.set(0,5,9);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.xr.enabled=true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xffffff,0x557755,2));
+const sun=new THREE.DirectionalLight(0xffffff,2);
+sun.position.set(20,40,20); scene.add(sun);
+
+const road=new THREE.Mesh(
+ new THREE.PlaneGeometry(18,1000),
+ new THREE.MeshStandardMaterial({color:0x333333})
+);
+road.rotation.x=-Math.PI/2; road.position.z=-350; scene.add(road);
+
+const grass=new THREE.Mesh(
+ new THREE.PlaneGeometry(180,1000),
+ new THREE.MeshStandardMaterial({color:0x397a35})
+);
+grass.rotation.x=-Math.PI/2; grass.position.y=-.03; grass.position.z=-350; scene.add(grass);
+
+for(let x of [-5,5]){
+ const line=new THREE.Mesh(
+  new THREE.BoxGeometry(.18,.02,1000),
+  new THREE.MeshBasicMaterial({color:0xffffff})
+ );
+ line.position.set(x,.02,-350); scene.add(line);
+}
+for(let z=0;z>-1000;z-=12){
+ const line=new THREE.Mesh(
+  new THREE.BoxGeometry(.18,.025,6),
+  new THREE.MeshBasicMaterial({color:0xffffff})
+ );
+ line.position.set(0,.03,z); scene.add(line);
+}
+
+function box(w,h,d,color,x,y,z){
+ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),new THREE.MeshStandardMaterial({color}));
+ m.position.set(x,y,z); scene.add(m); return m;
+}
+
+const truck=new THREE.Group();
+const cab=box(3.2,2.7,3.6,0xc92828,0,2,-2);
+cab.position.set(0,2,-2); truck.add(cab);
+const hood=box(3.25,.8,1.2,0xb51e1e,0,1.15,-4.2); truck.add(hood);
+const trailer=box(3.6,3.3,7,0xe6e6e6,0,2.6,3.3); truck.add(trailer);
+for(const x of [-1.35,1.35]){
+ for(const z of [-3.2,-.8,2.0,4.8]){
+  const w=new THREE.Mesh(new THREE.CylinderGeometry(.55,.55,.35,24),new THREE.MeshStandardMaterial({color:0x111111}));
+  w.rotation.z=Math.PI/2; w.position.set(x,.65,z); truck.add(w);
+ }
+}
+truck.position.set(0,0,5);
+scene.add(truck);
+
+const traffic=[];
+function makeCar(x,z,color){
+ const g=new THREE.Group();
+ const body=new THREE.Mesh(new THREE.BoxGeometry(2.2,1,4),new THREE.MeshStandardMaterial({color}));
+ body.position.y=.75; g.add(body);
+ const top=new THREE.Mesh(new THREE.BoxGeometry(1.7,.7,1.8),new THREE.MeshStandardMaterial({color:0x222222}));
+ top.position.y=1.45; g.add(top);
+ g.position.set(x,0,z); scene.add(g); traffic.push(g);
+}
+makeCar(-3.2,-45,0x2255cc);
+makeCar(3.2,-85,0xf0c000);
+makeCar(-3.2,-135,0x22aa55);
+
+const keys={};
+addEventListener("keydown",e=>keys[e.key.toLowerCase()]=true);
+addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+
+function bind(id,key){
+ const b=document.getElementById(id);
+ const on=()=>keys[key]=true, off=()=>keys[key]=false;
+ b.addEventListener("pointerdown",on);
+ b.addEventListener("pointerup",off);
+ b.addEventListener("pointercancel",off);
+ b.addEventListener("pointerleave",off);
+}
+bind("gas","w"); bind("brake","s"); bind("left","a"); bind("right","d"); bind("nitro","shift");
+
+let speed=0,damage=0,money=0,last=performance.now(),crashCooldown=0;
+
+function update(dt){
+ const accelerating=keys.w||keys.arrowup;
+ const braking=keys.s||keys.arrowdown;
+ const nitro=keys.shift;
+
+ // Much gentler driving:
+ const maxSpeed=nitro?28:16;
+ const accel=accelerating?7:0;
+ if(accelerating) speed+=accel*dt;
+ else speed-=2.2*dt;
+ if(braking) speed-=11*dt;
+ speed=Math.max(0,Math.min(maxSpeed,speed));
+
+ const steer=(keys.a||keys.arrowleft?-1:0)+(keys.d||keys.arrowright?1:0);
+ truck.rotation.y += steer*0.65*dt*(speed/16);
+ truck.position.x += steer*4.0*dt*(speed/16);
+ truck.position.x=THREE.MathUtils.clamp(truck.position.x,-6,6);
+
+ // Move world toward player.
+ const dz=speed*dt;
+ for(const c of traffic){
+   c.position.z+=dz*.9;
+   if(c.position.z>25){
+     c.position.z=-180-Math.random()*180;
+     c.position.x=(Math.random()<.5?-3.2:3.2);
+   }
+   if(crashCooldown<=0 &&
+      Math.abs(c.position.x-truck.position.x)<2.3 &&
+      Math.abs(c.position.z-truck.position.z)<3.2){
+      damage=Math.min(100,damage+10);
+      speed*=.35;
+      money=Math.max(0,money-50);
+      crashCooldown=1.2;
+      showMessage("💥 ¡CHOQUE!<br>Daño +10%");
+   }
+ }
+ crashCooldown-=dt;
+
+ camera.position.lerp(new THREE.Vector3(truck.position.x,5.2,12),.08);
+ camera.lookAt(truck.position.x,1.7,-5);
+
+ document.getElementById("speed").textContent=Math.round(speed*3.6);
+ document.getElementById("damage").textContent=Math.round(damage);
+ document.getElementById("money").textContent=money;
+}
+
+let msgTimer=0;
+function showMessage(t){
+ const m=document.getElementById("msg");
+ m.innerHTML=t; m.style.display="block"; msgTimer=1.2;
+}
+
+function animate(now){
+ const dt=Math.min((now-last)/1000,.05); last=now;
+ update(dt);
+ if(msgTimer>0){msgTimer-=dt;if(msgTimer<=0)document.getElementById("msg").style.display="none";}
+ renderer.render(scene,camera);
+}
+renderer.setAnimationLoop(animate);
+
+document.getElementById("vr").onclick=async()=>{
+ try{
+   if(!navigator.xr){alert("WebXR no está disponible en este navegador.");return;}
+   const supported=await navigator.xr.isSessionSupported("immersive-vr");
+   if(!supported){alert("Este navegador no admite VR inmersiva.");return;}
+   const session=await navigator.xr.requestSession("immersive-vr",{
+     requiredFeatures:["local-floor"],
+     optionalFeatures:["hand-tracking","bounded-floor"]
+   });
+   renderer.xr.setSession(session);
+ }catch(e){alert("No se pudo iniciar VR: "+e.message);}
+};
+
+addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>'''
+
+path=Path("/mnt/data/index.html")
+path.write_text(html,encoding="utf-8")
+print(f"Archivo creado: {path}")
